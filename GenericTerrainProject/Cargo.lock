@@ -9,6 +9,7 @@ dependencies = [
  "gl",
  "gl_loader",
  "glfw",
+ "glm",
 ]
 
 [[package]]
@@ -407,6 +408,15 @@ checksum = "b5b92fb706b28b5ccb8e93edb0b7fc8a153f626430abe8e354bc5e4ad29860b0"
 dependencies = [
  "cmake",
  "pkg-config",
+]
+
+[[package]]
+name = "glm"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "554870bc5d1b098ae10c380ebfeeb35e408107dcb5bb00e4677fc64eb4ce2aea"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

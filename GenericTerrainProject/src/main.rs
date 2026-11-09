@@ -6,26 +6,17 @@ extern crate gl_loader;
 
 use glfw::{Action, Context, Key::{self}};
 use gl::types::*;
-use std::{ffi::CString, os::raw::c_void};
+use std::{f32::consts::PI, ffi::CString};
 
-static VERTEX_DATA: [GLfloat; 6] = [0.0, 0.5, 0.5, -0.5, -0.5, -0.5];
+pub mod terrain_gen;
+
+static VERTEX_DATA: [f32; 12] = [
+    0.5, 0., 0.5,
+    -0.5, 0., -0.5,
+    0.5, 0., -0.5,
+    -0.5, 0., 0.5,
+];
 const VERTICES: [GLuint; 6] = [0, 1, 2, 0, 1, 3];
-
-static VS_SRC: &str = "
-#version 150
-in vec2 position;
-
-void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-}";
-
-static FS_SRC: &str = "
-#version 150
-out vec4 out_color;
-
-void main() {
-    out_color = vec4(1.0, 1.0, 1.0, 1.0);
-}";
 
 fn compile_shader(src: &str, ty: GLenum) -> GLuint {
     let shader;
@@ -95,9 +86,14 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
 }
 
 fn main() {
+    let vs_src: String = std::fs::read_to_string("./data/shaders/vs.glsl").unwrap();
+    let fs_src: String = std::fs::read_to_string("./data/shaders/fs.glsl").unwrap();
+
     let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
 
-    let (mut window, events) = glfw.create_window(300, 300, "Hello this is window", glfw::WindowMode::Windowed)
+    glfw.window_hint(glfw::WindowHint::Samples(Some(4)));
+
+    let (mut window, events) = glfw.create_window(600, 600, "Yay GLFW", glfw::WindowMode::Windowed)
         .expect("Failed to create GLFW window.");
 
     window.set_key_polling(true);
@@ -107,15 +103,17 @@ fn main() {
 
     gl::load_with(|symbol| gl_loader::get_proc_address(symbol) as *const _);
 
-    let vertex_shader = compile_shader(VS_SRC, gl::VERTEX_SHADER);
-    let fragment_shader = compile_shader(FS_SRC, gl::FRAGMENT_SHADER);
+    glfw.set_swap_interval(glfw::SwapInterval::None);
+
+    let vertex_shader = compile_shader(&vs_src.into_boxed_str().to_owned(), gl::VERTEX_SHADER);
+    let fragment_shader = compile_shader(&fs_src.into_boxed_str().to_owned(), gl::FRAGMENT_SHADER);
     let program = link_program(vertex_shader, fragment_shader);
 
     let mut vao = 0;
     let mut vbo = 0;
     let mut ebo = 0;
 
-    unsafe {
+    unsafe { // Returns the position index for `position` in the vertex shader
         gl::GenVertexArrays(1, &mut vao);
         gl::BindVertexArray(vao);
 
@@ -127,22 +125,59 @@ fn main() {
         gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
         gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, size_of_val(&VERTICES) as isize, VERTICES.as_ptr().cast(), gl::STATIC_DRAW);
 
-
         gl::UseProgram(program);
         gl::BindFragDataLocation(program, 0, CString::new("out_color").unwrap().as_ptr());
         
         let pos_atr = gl::GetAttribLocation(program, CString::new("position").unwrap().as_ptr());
         gl::EnableVertexAttribArray(pos_atr as GLuint);
-        gl::VertexAttribPointer(pos_atr as GLuint, 2, gl::FLOAT, gl::FALSE as GLboolean, 0, std::ptr::null());
+        gl::VertexAttribPointer(pos_atr as GLuint, 3, gl::FLOAT, gl::FALSE as GLboolean, 0, std::ptr::null());
 
         gl::ClearColor(1.0, 0.0, 0.0, 1.0);
     }
 
     while !window.should_close() {
-        unsafe {
+        let (wwidth, wheight) = window.get_framebuffer_size();
+
+        let current_time = glfw.get_time() as f32;
+
+        // let mut _temp_vec: Vec<f32> = vec![0., 0.5, 0.];
+
+        // _temp_vec.as_ptr().cast::<f32>();
+
+        unsafe { // Update opengl and transformation things
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+            gl::Viewport(0, 0, wwidth, wheight);
 
             gl::UseProgram(program);
+
+            let position_index: i32 = gl::GetUniformLocation(program, CString::new("rotate").unwrap().as_ptr());
+            gl::Uniform1f(position_index, current_time);
+
+            let perspective_matrix: glm::Matrix4<f32> = glm::ext::perspective(glm::radians(90.), 1., 0.1, 100.0);
+
+            let perspective_atr: i32 = gl::GetUniformLocation(program, CString::new("perspective").unwrap().as_ptr());
+            gl::UniformMatrix4fv(perspective_atr, 1, gl::FALSE, perspective_matrix.as_array().as_ptr().cast());
+
+            let view_matrix: glm::Matrix4<f32> = glm::ext::look_at(
+                glm::Vector3 { x: 4., y: 0., z: 0. },
+                glm::Vector3 { x: 0., y: 0., z: 0. },
+                glm::Vector3 { x: 0., y: 1., z: 0. }
+            );
+
+            let view_atr: i32 = gl::GetUniformLocation(program, CString::new("view").unwrap().as_ptr());
+            gl::UniformMatrix4fv(view_atr, 1, gl::FALSE, view_matrix.as_array().as_ptr().cast());
+
+            let transform_matrix: glm::Matrix4<f32> = glm::Matrix4::new(
+                glm::Vector4::new(1., 0., 0., 0.),
+                glm::Vector4::new(0., 1., 0., 0.),
+                glm::Vector4::new(0., 0., 1., 0.),
+                glm::Vector4::new(0., 0., 0., 1.)
+            );
+            let transform_matrix = glm::ext::rotate(&transform_matrix, current_time % (2.*PI), glm::Vector3::new(0., 0., 1.));
+
+            let final_transform_atr: i32 = gl::GetUniformLocation(program, CString::new("final_transform").unwrap().as_ptr());
+            gl::UniformMatrix4fv(final_transform_atr, 1, gl::FALSE, transform_matrix.as_array().as_ptr().cast());
+
             gl::BindVertexArray(vao);
             gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
         }
@@ -153,6 +188,9 @@ fn main() {
         for (_, event) in glfw::flush_messages(&events) {
             handle_window_event(&mut window, event);
         }
+
+        // println!("{}", 1.0/(glfw.get_time() - lastTime));
+        // last_time = glfw.get_time();
     }
 }
 
