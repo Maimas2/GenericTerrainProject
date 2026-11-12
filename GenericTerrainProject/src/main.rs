@@ -4,7 +4,7 @@ extern crate gl;
 extern crate glfw;
 extern crate gl_loader;
 
-use glfw::{Action, Context, Key::{self, X}};
+use glfw::{Action, Context, Key::self};
 use gl::types::*;
 use std::{f32::consts::PI, ffi::CString};
 
@@ -15,22 +15,75 @@ struct ButtonsHeld {
     a: bool,
     s: bool,
     d: bool,
+    space: bool,
+    shift: bool,
 }
 
 // Represents a facing direction in 3d space using the theta-phi orientation you learned in 259
+// The y and z coordinates are swapped with each other from what you're used to... for some reason...
+#[derive(Debug)]
 struct ThetaPhi {
     theta: f32,
     phi: f32,
 }
 impl ThetaPhi {
     pub fn to_glm_vec3(&self) -> glm::Vector3<f32> {
-        glm::Vector3 { x: self.theta.cos()*self.phi.sin(), y: self.theta.sin()*self.phi.sin(), z: self.phi.cos() }
+        glm::Vector3 { x: self.theta.cos()*self.phi.sin(), z: self.theta.sin()*self.phi.sin(), y: self.phi.cos() }
+    }
+}
+
+#[derive(Debug)]
+struct MeshData {
+    pub vao: u32,
+    pub _vbo: u32,
+    pub _ebo: u32,
+    pub num_tris: u32,
+    pub _raw_data: terrain_gen::MeshRawData
+}
+impl MeshData {
+    pub unsafe fn bind_mesh(&self) {
+        unsafe { gl::BindVertexArray(self.vao) };
+    }
+
+    pub unsafe fn draw_mesh(&self) {
+        unsafe {
+            self.bind_mesh();
+            gl::DrawElements(gl::TRIANGLES, (self.num_tris * 3) as i32, gl::UNSIGNED_INT, std::ptr::null());
+        }
+    }
+}
+
+unsafe fn construct_mesh_from_raw(raw_mesh: terrain_gen::MeshRawData) -> MeshData {
+    let mut vao = 0;
+    let mut vbo = 0;
+    let mut ebo = 0;
+
+    unsafe {
+        gl::GenVertexArrays(1, &mut vao);
+        gl::BindVertexArray(vao);
+
+        gl::GenBuffers(1, &mut vbo);
+        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
+        gl::BufferData(gl::ARRAY_BUFFER, (size_of::<f32>() * raw_mesh.points.len()) as GLsizeiptr, raw_mesh.points.as_ptr().cast(), gl::STATIC_DRAW);
+
+        gl::GenBuffers(1, &mut ebo);
+        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
+        gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (size_of::<u32>() * raw_mesh.indices.len()) as isize, raw_mesh.indices.as_ptr().cast(), gl::STATIC_DRAW);
+    }
+    
+    MeshData {
+        vao,
+        _vbo: vbo,
+        _ebo: ebo,
+        num_tris: (raw_mesh.indices.len() / 3) as u32,
+        _raw_data: raw_mesh
     }
 }
 
 const CAMERA_SPEED: f32 = 0.0004;
+const CAMERA_TURN_SPEED: f32 = 0.002;
 
-const VERTICES: [GLuint; 6] = [0, 1, 2, 0, 1, 3];
+// const VERTICES: [GLuint; 6] = [0, 1, 2, 0, 1, 3];
 
 fn compile_shader(src: &str, ty: GLenum) -> GLuint {
     let shader;
@@ -110,7 +163,13 @@ fn handle_movement(camera_position: &mut glm::Vector3<f32>, camera_direction: &T
         *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
     }
     if current_buttons_held.a {
-        *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
+        *camera_position = *camera_position - glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
+    }
+    if current_buttons_held.space {
+        camera_position.y += CAMERA_SPEED;
+    }
+    if current_buttons_held.shift {
+        camera_position.y -= CAMERA_SPEED;
     }
 }
 
@@ -120,7 +179,7 @@ fn main() {
 
     let mut last_mouse_pos: [f32; 2] = [0., 0.];
 
-    let mut current_buttons_held: ButtonsHeld = ButtonsHeld { w: false, a: false, s: false, d: false };
+    let mut current_buttons_held: ButtonsHeld = ButtonsHeld { w: false, a: false, s: false, d: false, space: false, shift: false };
 
     let vs_src: String = std::fs::read_to_string("./data/shaders/vs.glsl").unwrap();
     let fs_src: String = std::fs::read_to_string("./data/shaders/fs.glsl").unwrap();
@@ -149,27 +208,9 @@ fn main() {
     let fragment_shader = compile_shader(&fs_src.into_boxed_str().to_owned(), gl::FRAGMENT_SHADER);
     let program = link_program(vertex_shader, fragment_shader);
 
-    let mut vao = 0;
-    let mut vbo = 0;
-    let mut ebo = 0;
-
-    let gend_mesh: Vec<f32> = terrain_gen::generate_test_mesh();
+    let temp_mesh: MeshData = unsafe { construct_mesh_from_raw(terrain_gen::generate_mesh()) };
 
     unsafe {
-        gl::GenVertexArrays(1, &mut vao);
-        gl::BindVertexArray(vao);
-
-        gl::GenBuffers(1, &mut vbo);
-        gl::BindBuffer(gl::ARRAY_BUFFER, vbo);
-        gl::BufferData(gl::ARRAY_BUFFER, (size_of::<f32>() * gend_mesh.len()) as GLsizeiptr, gend_mesh.as_ptr().cast(), gl::STATIC_DRAW);
-
-        gl::GenBuffers(1, &mut ebo);
-        gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
-        gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, size_of_val(&VERTICES) as isize, VERTICES.as_ptr().cast(), gl::STATIC_DRAW);
-
-        gl::UseProgram(program);
-        gl::BindFragDataLocation(program, 0, CString::new("out_color").unwrap().as_ptr());
-        
         gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE as GLboolean, 6 * size_of::<GLfloat>() as i32,
             std::ptr::null::<GLvoid>());
         gl::EnableVertexAttribArray(0);
@@ -177,9 +218,9 @@ fn main() {
         gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE as GLboolean, 6 * size_of::<GLfloat>() as i32,
             (3 * size_of::<GLfloat>()) as *const GLvoid);
         gl::EnableVertexAttribArray(1);
-
-        gl::ClearColor(0.0, 0.0, 0.0, 1.0);
     }
+
+    let mut _last_time: f64 = glfw.get_time();
 
     while !window.should_close() {
         let (wwidth, wheight) = window.get_framebuffer_size();
@@ -195,7 +236,10 @@ fn main() {
             let position_index: i32 = gl::GetUniformLocation(program, CString::new("rotate").unwrap().as_ptr());
             gl::Uniform1f(position_index, current_time);
 
-            let perspective_matrix: glm::Matrix4<f32> = glm::ext::perspective(glm::radians(90.), (wwidth as f32) / (wheight as f32), 0.1, 100.0);
+            let x_stretch_index: i32 = gl::GetUniformLocation(program, CString::new("x_stretch").unwrap().as_ptr());
+            gl::Uniform1f(x_stretch_index, (wwidth as f32) / (wheight as f32));
+
+            let perspective_matrix: glm::Matrix4<f32> = glm::ext::perspective(glm::radians(90.), 1., 0.1, 100.0);
 
             let perspective_atr: i32 = gl::GetUniformLocation(program, CString::new("perspective").unwrap().as_ptr());
             gl::UniformMatrix4fv(perspective_atr, 1, gl::FALSE, perspective_matrix.as_array().as_ptr().cast());
@@ -221,8 +265,9 @@ fn main() {
             let final_transform_atr: i32 = gl::GetUniformLocation(program, CString::new("final_transform").unwrap().as_ptr());
             gl::UniformMatrix4fv(final_transform_atr, 1, gl::FALSE, transform_matrix.as_array().as_ptr().cast());
 
-            gl::BindVertexArray(vao);
-            gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
+            temp_mesh.draw_mesh();
+            // gl::BindVertexArray(temp_mesh.vao);
+            // gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
         }
 
         window.swap_buffers();
@@ -234,8 +279,8 @@ fn main() {
 
         handle_movement(&mut camera_position, &camera_direction, &current_buttons_held);
 
-        // println!("{}", 1.0/(glfw.get_time() - lastTime));
-        // last_time = glfw.get_time();
+        // println!("{}", 1.0/(glfw.get_time() - _last_time));
+        // _last_time = glfw.get_time();
     }
 }
 
@@ -246,13 +291,17 @@ fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent, curr
 
     if let glfw::WindowEvent::Key(_key, _scancode, action, _modifiers) = event {
         if _key == glfw::Key::W  {
-            current_buttons_held.w = action != Action::Release;
+            current_buttons_held.w = action != Action::Release; // Must be != Release because when held, we also receive the repeat event, which we want to filter
         } else if _key == glfw::Key::A {
             current_buttons_held.a = action != Action::Release;
         } else if _key == glfw::Key::S {
             current_buttons_held.s = action != Action::Release;
         } else if _key == glfw::Key::D {
             current_buttons_held.d = action != Action::Release;
+        } else if _key == glfw::Key::Space {
+            current_buttons_held.space = action != Action::Release;
+        } else if _key == glfw::Key::LeftShift {
+            current_buttons_held.shift = action != Action::Release;
         }
     }
 
@@ -266,16 +315,17 @@ fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent, curr
             let dx = last_mouse_pos[0] - xpos;
             let dy = last_mouse_pos[1] - ypos;
 
-            camera_direction.theta += dy * 0.001;
-            camera_direction.phi += dx * 0.001;
-            
-            camera_direction.theta += 2.*PI;
-            camera_direction.phi += PI;
+            camera_direction.theta -= dx * CAMERA_TURN_SPEED;
+            camera_direction.phi -= dy * CAMERA_TURN_SPEED;
 
+            camera_direction.phi = camera_direction.phi.clamp(0., PI);
             camera_direction.theta %= 2.*PI;
-            camera_direction.phi %= PI;
 
             *last_mouse_pos = [xpos, ypos];
+
+            // println!("{:?}", camera_direction);
+            // println!("{:?}", camera_direction.to_glm_vec3());
+            // println!();
         }
     }
 }
