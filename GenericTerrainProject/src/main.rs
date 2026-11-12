@@ -154,16 +154,16 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
 
 fn handle_movement(camera_position: &mut glm::Vector3<f32>, camera_direction: &ThetaPhi, current_buttons_held: &ButtonsHeld) {
     if current_buttons_held.w {
-        *camera_position = *camera_position + (*camera_direction).to_glm_vec3() * CAMERA_SPEED;
+        *camera_position = *camera_position + (*camera_direction).to_glm_vec3() * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
     }
     if current_buttons_held.s {
-        *camera_position = *camera_position - (*camera_direction).to_glm_vec3() * CAMERA_SPEED;
+        *camera_position = *camera_position - (*camera_direction).to_glm_vec3() * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
     }
     if current_buttons_held.d {
-        *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
+        *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
     }
     if current_buttons_held.a {
-        *camera_position = *camera_position - glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
+        *camera_position = *camera_position - glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
     }
     if current_buttons_held.space {
         camera_position.y += CAMERA_SPEED;
@@ -187,7 +187,7 @@ fn main() {
     let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
 
     glfw.window_hint(glfw::WindowHint::Samples(Some(4)));
-    glfw.window_hint(glfw::WindowHint::Maximized(true));
+    // glfw.window_hint(glfw::WindowHint::Maximized(true));
 
     let (mut window, events) = glfw.create_window(600, 600, "Yay GLFW", glfw::WindowMode::Windowed)
         .expect("Failed to create GLFW window.");
@@ -208,9 +208,11 @@ fn main() {
     let fragment_shader = compile_shader(&fs_src.into_boxed_str().to_owned(), gl::FRAGMENT_SHADER);
     let program = link_program(vertex_shader, fragment_shader);
 
-    let temp_mesh: MeshData = unsafe { construct_mesh_from_raw(terrain_gen::generate_mesh()) };
+    let temp_mesh: MeshData = unsafe { construct_mesh_from_raw(terrain_gen::generate_mesh(1)) };
 
     unsafe {
+        gl::Enable(gl::DEPTH_TEST);
+
         gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE as GLboolean, 6 * size_of::<GLfloat>() as i32,
             std::ptr::null::<GLvoid>());
         gl::EnableVertexAttribArray(0);
