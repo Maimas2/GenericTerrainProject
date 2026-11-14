@@ -1,4 +1,5 @@
-// Snippets taken from https://github.com/rust-windowing/gl-rs/blob/master/gl/examples/triangle.rs
+// Snippets taken from https://github.com/rust-windowing/gl-rs/blob/master/gl/examples/triangle.rs for shader compilation
+// These snippets available under the Apache v2.0 License, which can be found at http://www.apache.org/licenses/
 
 extern crate gl;
 extern crate glfw;
@@ -6,9 +7,11 @@ extern crate gl_loader;
 
 use glfw::{Action, Context, Key::self};
 use gl::types::*;
-use std::{f32::consts::PI, ffi::CString};
+use std::{collections::HashMap, f32::consts::PI, ffi::CString};
 
 pub mod terrain_gen;
+
+const CHUNK_WORLD_SIZE: f32 = 4.;
 
 struct ButtonsHeld {
     w: bool,
@@ -30,6 +33,9 @@ impl ThetaPhi {
     pub fn to_glm_vec3(&self) -> glm::Vector3<f32> {
         glm::Vector3 { x: self.theta.cos()*self.phi.sin(), z: self.theta.sin()*self.phi.sin(), y: self.phi.cos() }
     }
+    pub fn to_glm_vec3_flat(&self) -> glm::Vector3<f32> {
+        glm::Vector3 { x: self.theta.cos(), z: self.theta.sin(), y: 0. }
+    }
 }
 
 #[derive(Debug)]
@@ -48,12 +54,12 @@ impl MeshData {
     pub unsafe fn draw_mesh(&self) {
         unsafe {
             self.bind_mesh();
-            gl::DrawElements(gl::TRIANGLES, (self.num_tris * 3) as i32, gl::UNSIGNED_INT, std::ptr::null());
+            gl::DrawArrays(gl::TRIANGLES, 0, (self.num_tris*3) as i32);
         }
     }
 }
 
-unsafe fn construct_mesh_from_raw(raw_mesh: terrain_gen::MeshRawData) -> MeshData {
+fn construct_mesh_from_raw(raw_mesh: terrain_gen::MeshRawData) -> MeshData {
     let mut vao = 0;
     let mut vbo = 0;
     let mut ebo = 0;
@@ -69,18 +75,30 @@ unsafe fn construct_mesh_from_raw(raw_mesh: terrain_gen::MeshRawData) -> MeshDat
         gl::GenBuffers(1, &mut ebo);
         gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, ebo);
         gl::BufferData(gl::ELEMENT_ARRAY_BUFFER, (size_of::<u32>() * raw_mesh.indices.len()) as isize, raw_mesh.indices.as_ptr().cast(), gl::STATIC_DRAW);
+
+        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE as GLboolean, 9 * size_of::<GLfloat>() as i32,
+            std::ptr::null::<GLvoid>());
+        gl::EnableVertexAttribArray(0);
+
+        gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE as GLboolean, 9 * size_of::<GLfloat>() as i32,
+            (3 * size_of::<GLfloat>()) as *const GLvoid);
+        gl::EnableVertexAttribArray(1);
+
+        gl::VertexAttribPointer(2, 3, gl::FLOAT, gl::FALSE as GLboolean, 9 * size_of::<GLfloat>() as i32,
+            (6 * size_of::<GLfloat>()) as *const GLvoid);
+        gl::EnableVertexAttribArray(2);
     }
     
     MeshData {
         vao,
         _vbo: vbo,
         _ebo: ebo,
-        num_tris: (raw_mesh.indices.len() / 3) as u32,
+        num_tris: (raw_mesh.points.len() / 3) as u32,
         _raw_data: raw_mesh
     }
 }
 
-const CAMERA_SPEED: f32 = 0.0004;
+const CAMERA_SPEED: f32 = 0.004;
 const CAMERA_TURN_SPEED: f32 = 0.002;
 
 // const VERTICES: [GLuint; 6] = [0, 1, 2, 0, 1, 3];
@@ -154,16 +172,16 @@ fn link_program(vs: GLuint, fs: GLuint) -> GLuint {
 
 fn handle_movement(camera_position: &mut glm::Vector3<f32>, camera_direction: &ThetaPhi, current_buttons_held: &ButtonsHeld) {
     if current_buttons_held.w {
-        *camera_position = *camera_position + (*camera_direction).to_glm_vec3() * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
+        *camera_position = *camera_position + (*camera_direction).to_glm_vec3_flat() * CAMERA_SPEED;
     }
     if current_buttons_held.s {
-        *camera_position = *camera_position - (*camera_direction).to_glm_vec3() * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
+        *camera_position = *camera_position - (*camera_direction).to_glm_vec3_flat() * CAMERA_SPEED;
     }
     if current_buttons_held.d {
-        *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
+        *camera_position = *camera_position + glm::cross((*camera_direction).to_glm_vec3_flat(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
     }
     if current_buttons_held.a {
-        *camera_position = *camera_position - glm::cross((*camera_direction).to_glm_vec3(), glm::Vector3::new(0., 1., 0.)) * glm::Vector3::new(1., 0., 1.) * CAMERA_SPEED;
+        *camera_position = *camera_position - glm::cross((*camera_direction).to_glm_vec3_flat(), glm::Vector3::new(0., 1., 0.)) * CAMERA_SPEED;
     }
     if current_buttons_held.space {
         camera_position.y += CAMERA_SPEED;
@@ -171,6 +189,10 @@ fn handle_movement(camera_position: &mut glm::Vector3<f32>, camera_direction: &T
     if current_buttons_held.shift {
         camera_position.y -= CAMERA_SPEED;
     }
+}
+
+fn redo_chunks_loaded(position: [i32; 2], current_chunks_loaded: &HashMap<[i32; 2], MeshData>) {
+
 }
 
 fn main() {
@@ -181,13 +203,16 @@ fn main() {
 
     let mut current_buttons_held: ButtonsHeld = ButtonsHeld { w: false, a: false, s: false, d: false, space: false, shift: false };
 
+    let mut last_chunk_occupied: [i32; 2] = [0, 0];
+    let mut current_chunks_loaded: HashMap<[i32; 2], MeshData> = HashMap::new();
+
     let vs_src: String = std::fs::read_to_string("./data/shaders/vs.glsl").unwrap();
     let fs_src: String = std::fs::read_to_string("./data/shaders/fs.glsl").unwrap();
 
     let mut glfw = glfw::init(glfw::fail_on_errors).unwrap();
 
     glfw.window_hint(glfw::WindowHint::Samples(Some(4)));
-    // glfw.window_hint(glfw::WindowHint::Maximized(true));
+    glfw.window_hint(glfw::WindowHint::Maximized(true));
 
     let (mut window, events) = glfw.create_window(600, 600, "Yay GLFW", glfw::WindowMode::Windowed)
         .expect("Failed to create GLFW window.");
@@ -208,18 +233,20 @@ fn main() {
     let fragment_shader = compile_shader(&fs_src.into_boxed_str().to_owned(), gl::FRAGMENT_SHADER);
     let program = link_program(vertex_shader, fragment_shader);
 
-    let temp_mesh: MeshData = unsafe { construct_mesh_from_raw(terrain_gen::generate_mesh(1)) };
+    for x in -4_i32..4 {
+        for y in -4_i32..4 {
+            let mesh_to_add = construct_mesh_from_raw(terrain_gen::generate_mesh(
+                1,
+                [x, y],
+                CHUNK_WORLD_SIZE
+            ));
+            current_chunks_loaded.insert([-x, -y], mesh_to_add);
+        }
+    }
 
+    // Enable depth test
     unsafe {
         gl::Enable(gl::DEPTH_TEST);
-
-        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE as GLboolean, 6 * size_of::<GLfloat>() as i32,
-            std::ptr::null::<GLvoid>());
-        gl::EnableVertexAttribArray(0);
-
-        gl::VertexAttribPointer(1, 3, gl::FLOAT, gl::FALSE as GLboolean, 6 * size_of::<GLfloat>() as i32,
-            (3 * size_of::<GLfloat>()) as *const GLvoid);
-        gl::EnableVertexAttribArray(1);
     }
 
     let mut _last_time: f64 = glfw.get_time();
@@ -229,7 +256,7 @@ fn main() {
 
         let current_time = glfw.get_time() as f32;
 
-        unsafe { // Update opengl and transformation matrices
+        unsafe { // Render prep: update opengl and transformation matrices
             gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
             gl::Viewport(0, 0, wwidth, wheight);
 
@@ -256,22 +283,36 @@ fn main() {
             gl::UniformMatrix4fv(view_atr, 1, gl::FALSE, view_matrix.as_array().as_ptr().cast());
 
             // transform_matrix held the rotation over time previous, but now is unneeded and so remains identity
-            let transform_matrix: glm::Matrix4<f32> = glm::Matrix4::new(
+            let identity_matrix: glm::Matrix4<f32> = glm::Matrix4::new(
                 glm::Vector4::new(1., 0., 0., 0.),
                 glm::Vector4::new(0., 1., 0., 0.),
                 glm::Vector4::new(0., 0., 1., 0.),
                 glm::Vector4::new(0., 0., 0., 1.)
             );
-            let transform_matrix = glm::ext::rotate(&transform_matrix, 0., glm::Vector3::new(0., 0., 1.));
+            let transform_matrix = glm::ext::rotate(&identity_matrix, 0., glm::Vector3::new(0., 0., 1.));
 
             let final_transform_atr: i32 = gl::GetUniformLocation(program, CString::new("final_transform").unwrap().as_ptr());
             gl::UniformMatrix4fv(final_transform_atr, 1, gl::FALSE, transform_matrix.as_array().as_ptr().cast());
 
-            temp_mesh.draw_mesh();
-            // gl::BindVertexArray(temp_mesh.vao);
-            // gl::DrawElements(gl::TRIANGLES, 6, gl::UNSIGNED_INT, std::ptr::null());
+            let camera_direction_atr: i32 = gl::GetUniformLocation(program, CString::new("camera_direction").unwrap().as_ptr());
+            let camera_direction_array: glm::Vector3<f32> = camera_direction.to_glm_vec3();
+            gl::Uniform3f(camera_direction_atr, camera_direction_array.x, camera_direction_array.y, camera_direction_array.z);
+
+            // Do the actual rendering
+            for (index, mesh_to_render) in &current_chunks_loaded {
+                let translate_matrix = glm::ext::translate(&identity_matrix, glm::Vector3::new(-index[0] as f32 * CHUNK_WORLD_SIZE, 0., -index[1] as f32 * CHUNK_WORLD_SIZE));
+                gl::UniformMatrix4fv(final_transform_atr, 1, gl::FALSE, translate_matrix.as_array().as_ptr().cast());
+                mesh_to_render.draw_mesh();
+            }
         }
 
+        let current_chunk_pos: [i32; 2] = [(camera_position.x / CHUNK_WORLD_SIZE).floor() as i32, (camera_position.z / CHUNK_WORLD_SIZE).floor() as i32];
+        if last_chunk_occupied != current_chunk_pos {
+            last_chunk_occupied = current_chunk_pos;
+            redo_chunks_loaded(last_chunk_occupied, &current_chunks_loaded);
+        }
+
+        // GLFW and event management
         window.swap_buffers();
         glfw.poll_events();
 
@@ -280,9 +321,6 @@ fn main() {
         }
 
         handle_movement(&mut camera_position, &camera_direction, &current_buttons_held);
-
-        // println!("{}", 1.0/(glfw.get_time() - _last_time));
-        // _last_time = glfw.get_time();
     }
 }
 
